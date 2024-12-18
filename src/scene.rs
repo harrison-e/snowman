@@ -95,13 +95,13 @@ impl Scene {
                 .map(|_i| 
                     Snowflake::new(
                         rng.gen_range(0..c).into(), 
-                        0f32,
+                        0.0,
                         rng.gen_range(0.6..=1.4),
                     ))
                 .collect(),
             max_snowflakes,
             wind_x: rng.gen_range(-0.25..0.25),
-            wind_y: rng.gen_range(-0.05..0.05),
+            wind_y: rng.gen_range(0.0..0.05),
         }
     }
     
@@ -110,6 +110,7 @@ impl Scene {
         if self.rng.gen_ratio(1, 5) {
             self.wind_x += self.rng.gen_range(-0.1..=0.1);
             self.wind_y += self.rng.gen_range(-0.1..=0.1);
+            self.wind_y = self.wind_y.max(0.0);
         }
 
         // Update snowflakes

@@ -5,7 +5,7 @@ use crossterm::{
     event::{self, Event, KeyCode, poll},
 };
 
-const NUM_SNOWFLAKES: usize = 128;
+const NUM_SNOWFLAKES: usize = 512;
 
 fn check_quit() -> Result<bool, Box<dyn std::error::Error>> {
     if poll(TIMESTEP)? {
