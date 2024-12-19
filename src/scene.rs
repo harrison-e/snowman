@@ -6,6 +6,7 @@ use crossterm::{
 use std::io::{stdout, Write};
 use std::time::Duration;
 use chrono::prelude::*;
+use clap::ValueEnum;
 use rand::{Rng, rngs::ThreadRng};
 pub const TIMESTEP: Duration = Duration::from_millis(750); // T
 const GRAVITY: f32 = 0.98;  // b/T
@@ -23,7 +24,6 @@ struct Snowflake {
     m: f32, // grams
 }
 
-// TODO better physics for cooler animation
 impl Snowflake {
     fn new(x0: f32, y0: f32, m: f32) -> Self {
         Snowflake {
@@ -46,71 +46,123 @@ impl Snowflake {
 
 
 /**
+ *  Intensity enum is used to construct a Scene 
+ *  
+ */
+#[derive(Debug, Clone, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum SnowfallIntensity {
+    #[value(name = "low", alias = "l")]
+    Low,
+    #[value(name = "medium", alias = "m")]
+    Medium,
+    #[value(name = "high", alias = "h")]
+    High
+}
+
+/**
  *  Struct containing all of the scene's data
  */
 pub struct Scene {
-    cols: u16,          // b
-    rows: u16,          // b
-    snowman_col: u16,   // b
-    tree_col: u16,      // b
-    santa_col: u16,     // b
+    cols: u16,                  // b
+    rows: u16,                  // b
+    snowman_col: Option<u16>,   // b
+    tree_col: Option<u16>,      // b
+    santa_col: Option<u16>,     // b
     rng: ThreadRng,
     snowflakes: Vec<Snowflake>,
     max_snowflakes: usize,
-    wind_x: f32,        // b/T
-    wind_y: f32,        // b/T
+    intensity: SnowfallIntensity,
+    wind_x: f32,                // b/T
+    wind_y: f32,                // b/T
 } 
 
 impl Scene {
-    // TODO better calibrate initial num snowflakes with cols, rows
-    pub fn new(max_snowflakes: usize) -> Self {
+    fn calc_entity_positions(&mut self) {
+        // Ensure that tree, snowman, and Santa don't overlap
+        if self.cols >= 6 {
+            self.snowman_col = Some(self.rng.gen_range(1..self.cols-1));
+        }
+        
+        if let Some(snowman_col) = self.snowman_col {
+            if self.cols >= 12 {
+                let tree_col = loop {
+                    let num: u16 = self.rng.gen_range(2..self.cols-2);
+                    if (num as i32 - snowman_col as i32).abs() >= 6 {
+                        break num;
+                    }
+                };
+                self.tree_col = Some(tree_col);
+
+                if self.cols >= 17 {
+                    let santa_col = loop {
+                        let num: u16 = self.rng.gen_range(1..self.cols-1);
+                        if (num as i32 - snowman_col as i32).abs() >= 5
+                            && (num as i32 - tree_col as i32).abs() >= 6 {
+                            break num;
+                        }
+                    };
+                    self.santa_col = Some(santa_col);
+                }
+            }
+        }
+    }
+
+    fn init_snowflakes(&mut self) {
+        self.max_snowflakes = (match self.intensity {
+            SnowfallIntensity::Low => 0.05,
+            SnowfallIntensity::Medium => 0.1,
+            SnowfallIntensity::High => 0.2,
+        } * (self.cols as f32) * (self.rows as f32)) as usize;
+        let num_snowflakes = self.rng.gen_range(0..(self.max_snowflakes / 16));
+        self.snowflakes = (0..num_snowflakes)
+            .map(|_i| 
+                Snowflake::new(
+                    self.rng.gen_range(0..self.cols).into(), 
+                    0.0,
+                    self.rng.gen_range(0.6..=1.4),
+                ))
+            .collect();
+    }
+
+    pub fn new(intensity: SnowfallIntensity) -> Self {
         let (c, r) = size().expect("Could not get terminal size.");
         let mut rng = rand::thread_rng();
-        let num_snowflakes = rng.gen_range(0..(max_snowflakes / 16));
 
-        // Ensure that tree, snowman, and Santa don't overlap
-        let snowman_col: u16 = rng.gen_range(1..c-1);
-        let tree_col = loop {
-            let num: u16 = rng.gen_range(2..c-2);
-            if (num as i32 - snowman_col as i32).abs() >= 4 {
-                break num;
-            }
-        };
-        let santa_col = loop {
-            let num: u16 = rng.gen_range(1..c-1);
-            if (num as i32 - snowman_col as i32).abs() >= 3
-                && (num as i32 - tree_col as i32).abs() >= 4 {
-                break num;
-            }
-        };
-
-        Scene {
+        let mut s = Scene {
             cols: c,
             rows: r,
-            snowman_col, 
-            tree_col,
-            santa_col,
+            snowman_col: None, 
+            tree_col: None, 
+            santa_col: None, 
             rng: rng.clone(),
-            snowflakes: (0..num_snowflakes)
-                .map(|_i| 
-                    Snowflake::new(
-                        rng.gen_range(0..c).into(), 
-                        0.0,
-                        rng.gen_range(0.6..=1.4),
-                    ))
-                .collect(),
-            max_snowflakes,
+            snowflakes: Vec::new(),
+            max_snowflakes: 0usize,
+            intensity,
             wind_x: rng.gen_range(-0.25..0.25),
             wind_y: rng.gen_range(0.0..0.05),
-        }
+        };
+        s.calc_entity_positions();
+        s.init_snowflakes();
+        s
     }
     
     pub fn update(&mut self) {
+        // Update scene if dimensions are changed
+        let (c, r) = size().expect("Could not get terminal size.");
+        if c != self.cols || r != self.rows {
+            self.cols = c;
+            self.rows = r;
+            self.calc_entity_positions();
+            self.init_snowflakes();
+            return;
+        }
+
         // Update wind with 1/5 chance 
         if self.rng.gen_ratio(1, 5) {
             self.wind_x += self.rng.gen_range(-0.1..=0.1);
             self.wind_y += self.rng.gen_range(-0.1..=0.1);
-            self.wind_y = self.wind_y.max(0.0);
+            self.wind_y = self.wind_y.max(0.0); // So snow doesn't go up
         }
 
         // Update snowflakes
@@ -131,14 +183,11 @@ impl Scene {
                     .map(|_i| 
                         Snowflake::new(
                              self.rng.gen_range(0..self.cols).into(), 
-                             0f32,
-                             self.rng.gen_range(0.8..1.2),
+                             0.0,
+                             self.rng.gen_range(0.6..1.4),
                         ))
                     .collect::<Vec<Snowflake>>()
             );
-
-            // Sort snowflakes by y increasing
-            self.snowflakes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
         } 
     }
 
@@ -179,14 +228,16 @@ impl Scene {
     //  X:
     //  This is some janky cursor-moving, ANSI-color-encoding, inline-printing code 
     fn render_snowman(&self) {
-        self.move_cursor(self.snowman_col-1, self.rows-5);
-        print!("\x1B[0;30m_\x1B[0;40m  \x1B[0;30m_\x1B[0m");
-        self.move_cursor(self.snowman_col, self.rows-4);
-        print!("\x1B[47;30m''\x1B[0;38;5;202m-\x1B[0m");
-        self.move_cursor(self.snowman_col-1, self.rows-3);
-        print!("\x1B[0;38;5;52m\\\x1B[0;47;30m :\x1B[0;38;5;52m/\x1B[0m");
-        self.move_cursor(self.snowman_col, self.rows-2);
-        print!("\x1B[0;47;30m :\x1B[0m");
+        if let Some(snowman_col) = self.snowman_col {
+            self.move_cursor(snowman_col-1, self.rows-5);
+            print!("\x1B[0;30m_\x1B[0;40m  \x1B[0;30m_\x1B[0m");
+            self.move_cursor(snowman_col, self.rows-4);
+            print!("\x1B[47;30m''\x1B[0;38;5;202m>\x1B[0m");
+            self.move_cursor(snowman_col-1, self.rows-3);
+            print!("\x1B[0;38;5;52m\\\x1B[0;47;30m :\x1B[0;38;5;52m/\x1B[0m");
+            self.move_cursor(snowman_col, self.rows-2);
+            print!("\x1B[0;47;30m :\x1B[0m");
+        }
     }
 
     // This is the tree:
@@ -197,21 +248,23 @@ impl Scene {
     //   X
     // This, like the above function, is super jank
     fn render_tree(&mut self) {
-        self.move_cursor(self.tree_col, self.rows-6);
-        print!("\x1B[0;33m*\x1B[0m");
-        self.move_cursor(self.tree_col-1, self.rows-5);
-        print!("\x1B[0;37m_\x1B[0;42m \x1B[0;37m_\x1B[0m");
-        self.move_cursor(self.tree_col-2, self.rows-4);
-        print!("\x1B[0;37m_\x1B[0;42m   \x1B[0;37m_\x1B[0m");
-        self.move_cursor(self.tree_col-2, self.rows-3);
-        print!("\x1B[0;42m     \x1B[0m");
-        if self.days_until_xmas() == 0i64 {
-            self.move_cursor(self.tree_col-1, self.rows-2);
-            print!("\x1B[0;33;44m┼\x1B[0;48;5;52m \x1B[0;33;41m┼\x1B[0m");
-        }
-        else {
-            self.move_cursor(self.tree_col, self.rows-2);
-            print!("\x1B[0;48;5;52m \x1B[0m");
+        if let Some(tree_col) = self.tree_col {
+            self.move_cursor(tree_col, self.rows-6);
+            print!("\x1B[0;33m*\x1B[0m");
+            self.move_cursor(tree_col-1, self.rows-5);
+            print!("\x1B[0;37m_\x1B[0;42m \x1B[0;37m_\x1B[0m");
+            self.move_cursor(tree_col-2, self.rows-4);
+            print!("\x1B[0;37m_\x1B[0;42m   \x1B[0;37m_\x1B[0m");
+            self.move_cursor(tree_col-2, self.rows-3);
+            print!("\x1B[0;42m     \x1B[0m");
+            if self.days_until_xmas() == 0i64 {
+                self.move_cursor(tree_col-1, self.rows-2);
+                print!("\x1B[0;33;44m┼\x1B[0;48;5;52m \x1B[0;33;41m┼\x1B[0m");
+            }
+            else {
+                self.move_cursor(tree_col, self.rows-2);
+                print!("\x1B[0;48;5;52m \x1B[0m");
+            }
         }
     }
 
@@ -221,16 +274,17 @@ impl Scene {
     // sXXz
     //  XX
     fn render_santa(&self) {
-        self.move_cursor(self.santa_col, self.rows-5);
-        print!("\x1B[0;41;97m/\\\x1B[0;97m*\x1B[0m");
-        self.move_cursor(self.santa_col, self.rows-4);
-        print!("\x1B[0;107;30m^^\x1B[0m");
-        self.move_cursor(self.santa_col-1, self.rows-3);
-        print!("\x1B[0;31m/\x1B[0;41;97m  \x1B[0;31m\\\x1B[0m");
-        self.move_cursor(self.santa_col, self.rows-2);
-        print!("\x1B[0;41;97m  \x1B[0m");
+        if let Some(santa_col) = self.santa_col {
+            self.move_cursor(santa_col, self.rows-5);
+            print!("\x1B[0;41;97m/\\\x1B[0;97m*\x1B[0m");
+            self.move_cursor(santa_col, self.rows-4);
+            print!("\x1B[0;107;30m^^\x1B[0m");
+            self.move_cursor(santa_col-1, self.rows-3);
+            print!("\x1B[0;31m/\x1B[0;41;97m  \x1B[0;31m\\\x1B[0m");
+            self.move_cursor(santa_col, self.rows-2);
+            print!("\x1B[0;41;97m  \x1B[0m");
+        }
     }
-
 
     fn render_time(&mut self) {
         // Do xmas math
